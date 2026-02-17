@@ -1,20 +1,20 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import PipelineVisualizer from './components/PipelineVisualizer';
 import DetailPanel from './components/DetailPanel';
 import DataInspector from './components/DataInspector';
-import { generateRAGResponse } from './services/geminiService';
+import { generateRAGResponse, generateImage } from './services/geminiService';
 import { NodeType, SimulationStepDef } from './types';
-import { Play, Database, RefreshCw, Terminal, ChevronRight, RotateCcw } from 'lucide-react';
+import { Play, Database, RefreshCw, Terminal, ChevronRight, RotateCcw, Image as ImageIcon, Users, Loader2 } from 'lucide-react';
 
-// --- Simulation Definitions ---
+// --- Dynamic Simulation Definitions ---
 
-const STEPS_INGESTION: SimulationStepDef[] = [
+const getIngestionSteps = (tenantId: string): SimulationStepDef[] => [
   { 
-    stepId: 0, node: 'source', log: 'Source: Detecting changes via CDC',
+    stepId: 0, node: 'source', log: `Source: Detecting changes for Tenant ${tenantId}`,
     inspectorData: { 
       title: 'Modular RAG Ingestion', 
-      description: 'Why: Modular design allows independent scaling of ingestion logic. Metadata tagging ensures Multi-tenancy.', 
-      data: { event: "s3:ObjectCreated", file: "policy_v2.pdf", tenant_id: "T-800", technique: "Modular RAG" } 
+      description: `Why: Modular design allows independent scaling. Metadata tagging ensures Multi-tenancy for ${tenantId}.`, 
+      data: { event: "s3:ObjectCreated", file: "policy_v2.pdf", tenant_id: tenantId, technique: "Modular RAG" } 
     }
   },
   { 
@@ -22,7 +22,7 @@ const STEPS_INGESTION: SimulationStepDef[] = [
     inspectorData: { 
       title: 'Backpressure Handling', 
       description: 'Why: Decouples the fast ingestion source from the slower embedding model.', 
-      data: { topic: "raw-docs", partition_key: "doc_id_551", offset: 1042 } 
+      data: { topic: "raw-docs", partition_key: `doc_id_${tenantId}_551`, offset: 1042 } 
     }
   },
   { 
@@ -42,22 +42,22 @@ const STEPS_INGESTION: SimulationStepDef[] = [
     }
   },
   { 
-    stepId: 4, node: 'vector_db', edge: {from: 'embedding', to: 'vector_db'}, log: 'Vector DB: Indexing (HNSW)',
+    stepId: 4, node: 'vector_db', edge: {from: 'embedding', to: 'vector_db'}, log: `Vector DB: Indexing (HNSW) for ${tenantId}`,
     inspectorData: { 
       title: 'HNSW Indexing', 
       description: 'Why: HNSW is the "Default Winner" for latency/recall in RAM. We apply Tenant Filters here.', 
-      data: { index_type: "HNSW", metric: "cosine", filter: { tenant_id: "T-800" }, shards: 3 } 
+      data: { index_type: "HNSW", metric: "cosine", filter: { tenant_id: tenantId }, shards: 3 } 
     }
   }
 ];
 
-const STEPS_QUERY: SimulationStepDef[] = [
+const getQuerySteps = (tenantId: string): SimulationStepDef[] => [
   {
-    stepId: 0, node: 'user', log: 'User: Submitting vague query',
+    stepId: 0, node: 'user', log: `User (${tenantId}): Submitting vague query`,
     inspectorData: { 
       title: 'User Input', 
       description: 'Raw input. Often ambiguous or lacking context.', 
-      data: { query: "vacation policy?", user_id: "u_99", tenant_id: "T-800" } 
+      data: { query: "vacation policy?", user_id: "u_99", tenant_id: tenantId } 
     }
   },
   {
@@ -65,7 +65,7 @@ const STEPS_QUERY: SimulationStepDef[] = [
     inspectorData: { 
       title: 'Conversation Memory', 
       description: 'Why: To support multi-turn reasoning. Also checks Semantic Cache to save LLM costs.', 
-      data: { cache_hit: false, history_fetched_turns: 3 } 
+      data: { cache_hit: false, history_fetched_turns: 3, key: `chat:${tenantId}:u_99` } 
     }
   },
   {
@@ -73,7 +73,7 @@ const STEPS_QUERY: SimulationStepDef[] = [
     inspectorData: { 
       title: 'HyDE (Hypothetical Document Embeddings)', 
       description: 'Why: "Improves retrieval when user queries are vague." We hallucinate an ideal answer and embed THAT.', 
-      data: { method: "HyDE", hypothetical_doc: "The vacation policy for Tenant T-800 typically allows 20 days...", technique: "Query Expansion" } 
+      data: { method: "HyDE", hypothetical_doc: `The vacation policy for Tenant ${tenantId} typically allows 20 days...`, technique: "Query Expansion" } 
     }
   },
   {
@@ -85,23 +85,23 @@ const STEPS_QUERY: SimulationStepDef[] = [
     }
   },
   {
-    stepId: 4, node: 'vector_db', edge: {from: 'embedding', to: 'vector_db'}, log: 'Vector DB: Hybrid Search (Dense + Sparse)',
+    stepId: 4, node: 'vector_db', edge: {from: 'embedding', to: 'vector_db'}, log: `Vector DB: Hybrid Search (${tenantId})`,
     inspectorData: { 
       title: 'Hybrid Search (HNSW + BM25)', 
       description: 'Why: "HybridRAG combines semantic similarity with keyword fidelity." Retrieving top 50 candidates.', 
-      data: { dense_results: 40, sparse_results: 10, total_candidates: 50, latency_ms: 15 } 
+      data: { dense_results: 40, sparse_results: 10, total_candidates: 50, latency_ms: 15, filter: { tenant_id: tenantId } } 
     }
   },
   {
     stepId: 5, node: 'reranker', edge: {from: 'vector_db', to: 'reranker'}, log: 'Reranker: Cross-Encoder Refinement',
     inspectorData: { 
       title: 'Cross-Encoder Re-ranking', 
-      description: 'Why: "The Secret Sauce." Highlighting score changes. Note how the "correct" document moves from Rank #14 to #1.', 
+      description: 'Why: "The Secret Sauce." Highlighting score changes. Note how the "correct" document moves to the top.', 
       visualType: 'ranking',
       data: { 
         model: "mixedbread-ai/mxbai-rerank-large-v1",
         candidates: [
-          { id: "doc_88", text: "Vacation Policy (Tenant T-800)", old_rank: 14, new_rank: 1, score: 0.98 },
+          { id: "doc_88", text: `Vacation Policy (Tenant ${tenantId})`, old_rank: 14, new_rank: 1, score: 0.98 },
           { id: "doc_12", text: "Paid Time Off Guidelines (General)", old_rank: 3, new_rank: 2, score: 0.89 },
           { id: "doc_05", text: "Sick Leave Policy", old_rank: 1, new_rank: 3, score: 0.76 },
           { id: "doc_99", text: "Remote Work (Reference)", old_rank: 2, new_rank: 4, score: 0.45 },
@@ -123,7 +123,7 @@ const STEPS_QUERY: SimulationStepDef[] = [
     inspectorData: { 
       title: 'State Update', 
       description: 'Why: "KV Cache" concepts apply here for maintaining session context efficiently.', 
-      data: { action: "Append Turn", key: "chat:history:u_99", ttl: 3600 } 
+      data: { action: "Append Turn", key: `chat:history:${tenantId}:u_99`, ttl: 3600 } 
     }
   },
   {
@@ -136,11 +136,14 @@ const STEPS_QUERY: SimulationStepDef[] = [
   }
 ];
 
+const TENANTS = ['T-800', 'Cyberdyne', 'Massive Dynamic', 'Acme Corp'];
+
 const App: React.FC = () => {
   const [activeNode, setActiveNode] = useState<NodeType | null>(null);
   const [activeFlow, setActiveFlow] = useState<'ingestion' | 'query' | null>(null);
   const [consoleLogs, setConsoleLogs] = useState<string[]>([]);
   const [userQuery, setUserQuery] = useState('What is the vacation policy?');
+  const [selectedTenant, setSelectedTenant] = useState('T-800');
   
   // Simulation State
   const [simulationMode, setSimulationMode] = useState<'ingestion' | 'query' | null>(null);
@@ -148,22 +151,28 @@ const App: React.FC = () => {
   const [animatingEdge, setAnimatingEdge] = useState<{from: string, to: string} | null>(null);
   const [inspectorData, setInspectorData] = useState<any>(null);
 
+  // Image Gen State
+  const [imgPrompt, setImgPrompt] = useState('');
+  const [imgSize, setImgSize] = useState<'1K' | '2K' | '4K'>('1K');
+  const [generatedImg, setGeneratedImg] = useState<string | null>(null);
+  const [isGeneratingImg, setIsGeneratingImg] = useState(false);
+
   const log = (msg: string) => {
     setConsoleLogs(prev => [`> ${msg}`, ...prev.slice(0, 8)]); 
   };
 
   const startSimulation = (mode: 'ingestion' | 'query') => {
     setSimulationMode(mode);
-    setCurrentStepIndex(-1); // Will be incremented to 0 immediately by logic below or user click
+    setCurrentStepIndex(-1);
     setActiveFlow(mode);
     setConsoleLogs([]);
-    log(`Starting ${mode.toUpperCase()} pipeline simulation...`);
+    log(`Starting ${mode.toUpperCase()} pipeline simulation for ${selectedTenant}...`);
     setInspectorData(null);
-    advanceStep(mode, 0); // Start first step immediately
+    advanceStep(mode, 0); 
   };
 
   const advanceStep = (mode: 'ingestion' | 'query', stepIdx: number) => {
-    const steps = mode === 'ingestion' ? STEPS_INGESTION : STEPS_QUERY;
+    const steps = mode === 'ingestion' ? getIngestionSteps(selectedTenant) : getQuerySteps(selectedTenant);
     
     if (stepIdx >= steps.length) {
       log('Simulation Complete.');
@@ -186,7 +195,6 @@ const App: React.FC = () => {
     log(step.log);
     setInspectorData(step.inspectorData);
 
-    // If it's the LLM step in query, let's actually call Gemini API for fun
     if (mode === 'query' && step.node === 'llm') {
       callGemini();
     }
@@ -195,7 +203,6 @@ const App: React.FC = () => {
   const callGemini = async () => {
     const context = "Company Vacation Policy: Employees are entitled to 20 days of paid annual leave. Sick leave is 10 days per year.";
     const response = await generateRAGResponse(userQuery, context);
-    // Append the real response to the inspector data if needed, or just log it
     log(`[Real Gemini Response]: ${response}`);
   };
 
@@ -214,6 +221,27 @@ const App: React.FC = () => {
     log('Reset.');
   };
 
+  const handleGenerateImage = async () => {
+    if (!imgPrompt) return;
+    setIsGeneratingImg(true);
+    setGeneratedImg(null);
+    log(`Generating ${imgSize} image for prompt: "${imgPrompt}"...`);
+    
+    try {
+      const result = await generateImage(imgPrompt, imgSize);
+      if (result) {
+        setGeneratedImg(result);
+        log('Image generation successful.');
+      } else {
+        log('Image generation failed or no data returned.');
+      }
+    } catch (e) {
+      log('Error generating image.');
+    } finally {
+      setIsGeneratingImg(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 flex flex-col font-sans">
       {/* Header */}
@@ -227,7 +255,21 @@ const App: React.FC = () => {
             <p className="text-xs text-slate-400">Multi-tenant | Kafka Streaming | Flink | Redis | Gemini</p>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 bg-slate-800 px-3 py-1.5 rounded-lg border border-slate-700">
+                <Users className="w-4 h-4 text-slate-400" />
+                <span className="text-xs text-slate-500 font-semibold uppercase">Active Tenant:</span>
+                <select 
+                  value={selectedTenant} 
+                  onChange={(e) => {
+                      if (!simulationMode) setSelectedTenant(e.target.value);
+                  }}
+                  disabled={simulationMode !== null}
+                  className="bg-transparent text-sm font-bold text-white outline-none cursor-pointer disabled:opacity-50"
+                >
+                    {TENANTS.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+            </div>
             <a href="https://github.com/google-gemini" target="_blank" rel="noreferrer" className="text-xs text-blue-400 hover:text-blue-300 transition">
               Powered by Gemini API
             </a>
@@ -295,13 +337,67 @@ const App: React.FC = () => {
             </div>
           </div>
 
+          {/* Gemini Image Studio */}
+          <div className="bg-slate-900 border border-slate-800 rounded-xl p-4 shadow-sm flex flex-col md:flex-row gap-4">
+              <div className="flex-1">
+                 <div className="flex items-center gap-2 mb-2">
+                    <div className="p-1.5 bg-purple-900/30 rounded text-purple-400">
+                        <ImageIcon className="w-4 h-4" />
+                    </div>
+                    <h3 className="text-sm font-bold text-slate-200">Gemini Image Studio</h3>
+                    <span className="text-[10px] bg-purple-900/50 text-purple-300 px-1.5 py-0.5 rounded border border-purple-800">PRO</span>
+                 </div>
+                 <div className="flex gap-2 mb-2">
+                    <input 
+                      type="text"
+                      value={imgPrompt}
+                      onChange={(e) => setImgPrompt(e.target.value)}
+                      placeholder="Describe an image to generate..."
+                      className="flex-1 bg-slate-950 border border-slate-700 text-xs rounded px-3 py-2 focus:ring-2 focus:ring-purple-500 outline-none transition"
+                    />
+                    <select 
+                        value={imgSize} 
+                        onChange={(e) => setImgSize(e.target.value as any)}
+                        className="bg-slate-950 border border-slate-700 text-xs rounded px-2 outline-none"
+                    >
+                        <option value="1K">1K</option>
+                        <option value="2K">2K</option>
+                        <option value="4K">4K</option>
+                    </select>
+                    <button 
+                        onClick={handleGenerateImage}
+                        disabled={isGeneratingImg || !imgPrompt}
+                        className="bg-purple-600 hover:bg-purple-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold px-3 py-2 rounded transition flex items-center gap-2"
+                    >
+                        {isGeneratingImg ? <Loader2 className="w-3 h-3 animate-spin" /> : 'Generate'}
+                    </button>
+                 </div>
+              </div>
+              
+              {/* Image Result */}
+              {(generatedImg || isGeneratingImg) && (
+                  <div className="w-24 h-24 md:w-32 md:h-32 bg-black rounded-lg border border-slate-700 overflow-hidden flex items-center justify-center flex-shrink-0 relative group">
+                      {isGeneratingImg ? (
+                          <Loader2 className="w-6 h-6 text-purple-500 animate-spin" />
+                      ) : generatedImg ? (
+                          <>
+                            <img src={generatedImg} alt="Generated" className="w-full h-full object-cover" />
+                            <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                <a href={generatedImg} download="gemini-gen.png" className="text-[10px] text-white underline">Download</a>
+                            </div>
+                          </>
+                      ) : null}
+                  </div>
+              )}
+          </div>
+
           {/* Visualization Stage */}
           <div className="flex-1 min-h-[400px] flex flex-col">
              <div className="flex items-center justify-between mb-2">
                <h2 className="text-sm font-semibold text-slate-400">Architecture Diagram</h2>
                {simulationMode && (
                  <span className="text-xs bg-emerald-900/30 text-emerald-400 px-2 py-0.5 rounded border border-emerald-800">
-                    Step {currentStepIndex + 1} / {simulationMode === 'ingestion' ? STEPS_INGESTION.length : STEPS_QUERY.length}
+                    Step {currentStepIndex + 1} / {simulationMode === 'ingestion' ? getIngestionSteps(selectedTenant).length : getQuerySteps(selectedTenant).length}
                  </span>
                )}
              </div>
