@@ -96,8 +96,18 @@ const STEPS_QUERY: SimulationStepDef[] = [
     stepId: 5, node: 'reranker', edge: {from: 'vector_db', to: 'reranker'}, log: 'Reranker: Cross-Encoder Refinement',
     inspectorData: { 
       title: 'Cross-Encoder Re-ranking', 
-      description: 'Why: "The Secret Sauce." It fixes what geometry misses by jointly scoring Query+Document pairs.', 
-      data: { input: 50, output: 5, model: "mixedbread-ai/mxbai-rerank-large-v1", top_score: 0.98 } 
+      description: 'Why: "The Secret Sauce." Highlighting score changes. Note how the "correct" document moves from Rank #14 to #1.', 
+      visualType: 'ranking',
+      data: { 
+        model: "mixedbread-ai/mxbai-rerank-large-v1",
+        candidates: [
+          { id: "doc_88", text: "Vacation Policy (Tenant T-800)", old_rank: 14, new_rank: 1, score: 0.98 },
+          { id: "doc_12", text: "Paid Time Off Guidelines (General)", old_rank: 3, new_rank: 2, score: 0.89 },
+          { id: "doc_05", text: "Sick Leave Policy", old_rank: 1, new_rank: 3, score: 0.76 },
+          { id: "doc_99", text: "Remote Work (Reference)", old_rank: 2, new_rank: 4, score: 0.45 },
+          { id: "doc_34", text: "Office Holiday Party", old_rank: 4, new_rank: 5, score: 0.12 }
+        ]
+      } 
     }
   },
   {
@@ -213,7 +223,7 @@ const App: React.FC = () => {
             <Database className="w-5 h-5 text-white" />
           </div>
           <div>
-            <h1 className="text-xl font-bold tracking-tight text-white">Enterprise RAG Pipeline</h1>
+            <h1 className="text-xl font-bold tracking-tight text-white">Enterprise RAG Pipeline Explorer</h1>
             <p className="text-xs text-slate-400">Multi-tenant | Kafka Streaming | Flink | Redis | Gemini</p>
           </div>
         </div>

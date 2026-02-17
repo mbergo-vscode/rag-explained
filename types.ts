@@ -41,6 +41,7 @@ export interface SimulationStepData {
   title: string;
   data: Record<string, any> | string;
   description: string;
+  visualType?: 'json' | 'ranking';
 }
 
 export interface SimulationStepDef {
